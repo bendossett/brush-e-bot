@@ -1,15 +1,6 @@
 #include <Arduino.h>
 #include <LedControl.h>
-
-// *** LED Quadrant Pins *** //
-#define GREEN_CH 18
-#define BLUE_CH 19
-#define RED_CH 5
-
-#define Q1 23
-#define Q2 22
-#define Q3 1
-#define Q4 3
+#include "anims.h"
 
 // *** Pressure Sensor Pin *** //
 #define PRESSURE_PIN 26
@@ -19,126 +10,255 @@
 #define CS_LEFT 16
 #define CLK_LEFT 4
 
-#define DIN_RIGHT 34
-#define CS_RIGHT 35
-#define CLK_RIGHT 32
-
-uint counter = 0;
-
-uint quadrants[] = {Q1, Q2, Q3, Q4};
-
-int red_val = 255;
-int green_val = 0;
-int blue_val = 0;
-
 long start_time = 0;
 
 // *** Eye LedControl objects *** //
-LedControl lc_left = LedControl(DIN_LEFT, CLK_LEFT, CS_LEFT, 1);
-LedControl lc_right = LedControl(DIN_RIGHT, CLK_RIGHT, CS_RIGHT, 1);
+LedControl lc_left = LedControl(DIN_LEFT, CLK_LEFT, CS_LEFT, 2);
 
-byte anim_eye_blink[8][8] = {
-    {B00000000, B00000000, B00000000, B01111110, B00000000, B00000000, B00000000, B00000000},
-    {B00000000, B00000000, B00111100, B01000010, B00000000, B00000000, B00000000, B00000000},
-    {B00000000, B00011000, B00100100, B01000010, B00000000, B00000000, B00000000, B00000000},
-    {B00000000, B00000000, B00111100, B01000010, B00000000, B00000000, B00000000, B00000000},
-    {B00000000, B00000000, B00000000, B01111110, B00000000, B00000000, B00000000, B00000000},
-    {B00000000, B00000000, B00000000, B01000010, B00111100, B00000000, B00000000, B00000000},
-    {B00000000, B00000000, B00000000, B01000010, B00100100, B00011000, B00000000, B00000000},
-    {B00000000, B00000000, B00000000, B01000010, B00111100, B00000000, B00000000, B00000000}};
+int frame_counter = 0;
 
-uint frame_counter = 0;
+const Anim *current_anim_left;
+const Anim *current_anim_right;
+int current_anim_duration = 0;
+int current_anim_num_frames = 0;
+long current_anim_start_time = 0;
+
+const int NUM_PHASES = 13;
+
+const Anim *const ANIM_LIST[26] = {
+    &ANIM_OPEN_EYES,
+    &ANIM_OPEN_EYES,
+    &ANIM_WAIT_LEFT,
+    &ANIM_WAIT_RIGHT,
+    &ANIM_COUNTDOWN,
+    &ANIM_COUNTDOWN,
+    &ANIM_UPPER_LEFT_LEFT,
+    &ANIM_UPPER_LEFT_RIGHT,
+    &ANIM_COUNTDOWN,
+    &ANIM_COUNTDOWN,
+    &ANIM_UPPER_RIGHT_LEFT,
+    &ANIM_UPPER_RIGHT_RIGHT,
+    &ANIM_COUNTDOWN,
+    &ANIM_COUNTDOWN,
+    &ANIM_LOWER_LEFT_LEFT,
+    &ANIM_LOWER_LEFT_RIGHT,
+    &ANIM_COUNTDOWN,
+    &ANIM_COUNTDOWN,
+    &ANIM_LOWER_RIGHT_LEFT,
+    &ANIM_LOWER_RIGHT_RIGHT,
+    &ANIM_COUNTDOWN,
+    &ANIM_COUNTDOWN,
+    &ANIM_EXCITED_EYES,
+    &ANIM_EXCITED_EYES,
+    &ANIM_CLOSE_EYES,
+    &ANIM_CLOSE_EYES};
+
+int ANIM_DURATION[13] = {
+    0,
+    10,
+    -10,
+    20,
+    -10,
+    20,
+    -10,
+    20,
+    -10,
+    20,
+    -10,
+    10,
+    0,
+};
+
+int anim_frame_count[13] = {
+    7,
+    8,
+    40,
+    12,
+    40,
+    12,
+    40,
+    13,
+    40,
+    13,
+    40,
+    8,
+    7,
+};
+
+int phase_complete[] = {
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+};
+
+int phase = 0;
+int anim_idx = 0;
+
+bool new_phase = false;
+bool just_started = false;
+
+int frame_step = 1;
 
 void setup()
 {
     pinMode(PRESSURE_PIN, INPUT);
 
-    ledcAttachPin(GREEN_CH, 0);
-    ledcAttachPin(BLUE_CH, 1);
-    ledcAttachPin(RED_CH, 2);
-
-    ledcSetup(0, 4000, 8);
-    ledcSetup(1, 4000, 8);
-    ledcSetup(2, 4000, 8);
-
-    pinMode(Q1, OUTPUT);
-    pinMode(Q2, OUTPUT);
-    pinMode(Q3, OUTPUT);
-    pinMode(Q4, OUTPUT);
-
     start_time = millis();
-    digitalWrite(Q1, HIGH);
-    digitalWrite(Q2, LOW);
-    digitalWrite(Q3, LOW);
-    digitalWrite(Q4, LOW);
 
-    // *** Eye LedControl setup *** //
-    lc_left.shutdown(0, false);
-    lc_left.setIntensity(0, 0);
-    lc_left.clearDisplay(0);
+    for (int i = 0; i < lc_left.getDeviceCount(); i++)
+    {
+        lc_left.shutdown(i, false);
+        lc_left.setIntensity(i, 0);
+        lc_left.clearDisplay(i);
+    }
 
-    lc_right.shutdown(0, false);
-    lc_right.setIntensity(0, 0);
-    lc_right.clearDisplay(0);
+    Serial.begin(115200);
+    Serial.println("Starting");
+
+    current_anim_duration = ANIM_DURATION[0];
+    current_anim_left = ANIM_LIST[0];
+    current_anim_right = ANIM_LIST[1];
+    current_anim_start_time = millis();
+    current_anim_num_frames = anim_frame_count[0];
 }
 
 void loop()
 {
-    // put your main code here, to run repeatedly:
-
-    if (millis() - start_time > 30000)
+    // if pressure is above threshold don't do anything
+    if (analogRead(PRESSURE_PIN) > 100)
     {
-        for (int i = 0; i < 4; i++)
+        return;
+    }
+
+    delay(250);
+
+    // if phase is complete, move to next phase
+    if (phase_complete[phase])
+    {
+        phase++;
+        anim_idx += 2;
+
+        if (phase > NUM_PHASES)
         {
-            if (counter == i)
+            phase = 0;
+
+            for (int i = 0; i < NUM_PHASES; i++)
             {
-                digitalWrite(quadrants[i], HIGH);
+                phase_complete[i] = 0;
+            }
+        }
+
+        new_phase = true;
+
+        Serial.println("Starting phase " + String(phase));
+    }
+    if (new_phase)
+    {
+        new_phase = false;
+
+        current_anim_duration = ANIM_DURATION[phase];
+        current_anim_left = ANIM_LIST[anim_idx];
+        current_anim_right = ANIM_LIST[anim_idx + 1];
+        current_anim_start_time = millis();
+        current_anim_num_frames = anim_frame_count[phase];
+
+        frame_counter = 0;
+    }
+
+    if (current_anim_duration == 0)
+    {
+        // The anim should be played only once.
+
+        Serial.println("Frame counter: " + String(frame_counter) + " / " + String(current_anim_num_frames));
+
+        for (int i = 0; i < 8; i++)
+        {
+            lc_left.setRow(0, i, current_anim_left->anim[(frame_counter * 8) + i]);
+            lc_left.setRow(1, i, current_anim_right->anim[(frame_counter * 8) + i]);
+        }
+
+        if (frame_counter < current_anim_num_frames - 1)
+        {
+            frame_counter++;
+        }
+        else
+        {
+            phase_complete[phase] = 1;
+        }
+    }
+    else if (current_anim_duration > 0)
+    {
+        // The anim should be looped for a certain duration
+
+        long current_time = millis();
+
+        if (current_time - current_anim_start_time > current_anim_duration * 1000)
+        {
+            phase_complete[phase] = 1;
+        }
+        else
+        {
+            Serial.println("Frame counter: " + String(frame_counter) + " / " + String(current_anim_num_frames));
+
+            // Print a message about how long we have been looping
+            Serial.println("Current time: " + String(current_time - current_anim_start_time) + " / " + String(current_anim_duration * 100));
+
+            for (int i = 0; i < 8; i++)
+            {
+                lc_left.setRow(0, i, current_anim_left->anim[(frame_counter * 8) + i]);
+                lc_left.setRow(1, i, current_anim_right->anim[(frame_counter * 8) + i]);
+            }
+
+            if (frame_counter == current_anim_num_frames - 1)
+            {
+                frame_step = -1;
+            }
+            else if (frame_counter == 0)
+            {
+                frame_step = 1;
+            }
+
+            frame_counter += frame_step;
+        }
+    }
+    else
+    {
+        // The anim should take a certain duration to play once
+
+        long current_time = millis();
+
+        if (current_time - current_anim_start_time > (-current_anim_duration * 1000))
+        {
+            phase_complete[phase] = 1;
+        }
+        else
+        {
+            Serial.println("Frame counter: " + String(frame_counter) + " / " + String(current_anim_num_frames));
+            for (int i = 0; i < 8; i++)
+            {
+                lc_left.setRow(0, i, current_anim_left->anim[(frame_counter * 8) + i]);
+                lc_left.setRow(1, i, current_anim_right->anim[(frame_counter * 8) + i]);
+            }
+            // delay((-current_anim_duration) * 100 / current_anim_num_frames);
+
+            if (frame_counter < current_anim_num_frames - 1)
+            {
+                frame_counter++;
             }
             else
             {
-                digitalWrite(quadrants[i], LOW);
+                frame_counter = 0;
             }
         }
-        counter++;
-        if (counter > 3)
-        {
-            counter = 0;
-        }
-
-        ledcWrite(0, random(0, 255));
-        ledcWrite(1, random(0, 255));
-        ledcWrite(2, random(0, 255));
-
-        start_time = millis();
     }
-
-    // *** Eye LedControl loop *** //
-    if (millis() - start_time > 1000)
-    {
-        for (int i = 0; i < 8; i++)
-        {
-            lc_left.setRow(0, i, anim_eye_blink[frame_counter][i]);
-            lc_right.setRow(0, i, anim_eye_blink[frame_counter][i]);
-        }
-
-        frame_counter++;
-        if (frame_counter > 7)
-        {
-            frame_counter = 0;
-        }
-        start_time = millis();
-    }
-
-    // Randomly set different colors
-
-    // int pressure = analogRead(PRESSURE_PIN);
-
-    // if (pressure > 2000)
-    // {
-    //     Serial.println("Pressure detected");
-    // }
-    // else
-    // {
-    //     Serial.println("No pressure");
-    // }
 }
