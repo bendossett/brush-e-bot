@@ -6,7 +6,7 @@
 typedef struct Anim
 {
     const byte *anim;
-    const uint num_frames;
+    const int num_frames;
 } Anim;
 
 const byte data_eye_blink[64] = {

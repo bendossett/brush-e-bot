@@ -2,13 +2,15 @@
 #include <LedControl.h>
 #include "anims.h"
 
+// #define DEBUG
+
 // *** Pressure Sensor Pin *** //
-#define PRESSURE_PIN 26
+#define PRESSURE_PIN 0
 
 // *** Eye LedControl pins *** //
-#define DIN_LEFT 17
-#define CS_LEFT 16
-#define CLK_LEFT 4
+#define DIN_LEFT 7
+#define CS_LEFT 6
+#define CLK_LEFT 5
 
 long start_time = 0;
 
@@ -25,7 +27,7 @@ long current_anim_start_time = 0;
 
 const int NUM_PHASES = 13;
 
-const Anim *const ANIM_LIST[26] = {
+const Anim *const ANIM_LIST[NUM_PHASES * 2] = {
     &ANIM_OPEN_EYES,
     &ANIM_OPEN_EYES,
     &ANIM_WAIT_LEFT,
@@ -53,7 +55,7 @@ const Anim *const ANIM_LIST[26] = {
     &ANIM_CLOSE_EYES,
     &ANIM_CLOSE_EYES};
 
-int ANIM_DURATION[13] = {
+int ANIM_DURATION[NUM_PHASES] = {
     0,
     10,
     -10,
@@ -69,7 +71,7 @@ int ANIM_DURATION[13] = {
     0,
 };
 
-int anim_frame_count[13] = {
+int anim_frame_count[NUM_PHASES] = {
     7,
     8,
     40,
@@ -122,8 +124,10 @@ void setup()
         lc_left.clearDisplay(i);
     }
 
+#ifdef DEBUG
     Serial.begin(115200);
     Serial.println("Starting");
+#endif
 
     current_anim_duration = ANIM_DURATION[0];
     current_anim_left = ANIM_LIST[0];
@@ -135,7 +139,7 @@ void setup()
 void loop()
 {
     // if pressure is above threshold don't do anything
-    if (analogRead(PRESSURE_PIN) > 100)
+    if (analogRead(PRESSURE_PIN) < 50)
     {
         return;
     }
@@ -148,9 +152,10 @@ void loop()
         phase++;
         anim_idx += 2;
 
-        if (phase > NUM_PHASES)
+        if (phase >= NUM_PHASES)
         {
             phase = 0;
+            anim_idx = 0;
 
             for (int i = 0; i < NUM_PHASES; i++)
             {
@@ -160,7 +165,9 @@ void loop()
 
         new_phase = true;
 
+#ifdef DEBUG
         Serial.println("Starting phase " + String(phase));
+#endif
     }
     if (new_phase)
     {
@@ -178,9 +185,9 @@ void loop()
     if (current_anim_duration == 0)
     {
         // The anim should be played only once.
-
+#ifdef DEBUG
         Serial.println("Frame counter: " + String(frame_counter) + " / " + String(current_anim_num_frames));
-
+#endif
         for (int i = 0; i < 8; i++)
         {
             lc_left.setRow(0, i, current_anim_left->anim[(frame_counter * 8) + i]);
@@ -208,11 +215,12 @@ void loop()
         }
         else
         {
+#ifdef DEBUG
             Serial.println("Frame counter: " + String(frame_counter) + " / " + String(current_anim_num_frames));
 
             // Print a message about how long we have been looping
             Serial.println("Current time: " + String(current_time - current_anim_start_time) + " / " + String(current_anim_duration * 100));
-
+#endif
             for (int i = 0; i < 8; i++)
             {
                 lc_left.setRow(0, i, current_anim_left->anim[(frame_counter * 8) + i]);
@@ -243,7 +251,9 @@ void loop()
         }
         else
         {
+#ifdef DEBUG
             Serial.println("Frame counter: " + String(frame_counter) + " / " + String(current_anim_num_frames));
+#endif
             for (int i = 0; i < 8; i++)
             {
                 lc_left.setRow(0, i, current_anim_left->anim[(frame_counter * 8) + i]);
