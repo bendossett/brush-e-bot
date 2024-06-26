@@ -2,6 +2,7 @@
 #include <LedControl.h>
 #include "anims.h"
 
+// Uncomment this to get debug info in the serial monitor
 // #define DEBUG
 
 // *** Pressure Sensor Pin *** //
@@ -27,7 +28,8 @@ long current_anim_start_time = 0;
 
 const int NUM_PHASES = 13;
 
-const Anim *const ANIM_LIST[NUM_PHASES * 2] = {
+// All of the animations, in pairs of two, one for each eye
+const Anim *const ANIM_LIST[26] = {
     &ANIM_OPEN_EYES,
     &ANIM_OPEN_EYES,
     &ANIM_WAIT_LEFT,
@@ -55,7 +57,11 @@ const Anim *const ANIM_LIST[NUM_PHASES * 2] = {
     &ANIM_CLOSE_EYES,
     &ANIM_CLOSE_EYES};
 
-int ANIM_DURATION[NUM_PHASES] = {
+// The duration that each animation should play for
+//   0: play once
+//   > 0: play for x number of seconds
+//   < 0: take x seconds to play once
+int ANIM_DURATION[13] = {
     0,
     10,
     -10,
@@ -71,7 +77,8 @@ int ANIM_DURATION[NUM_PHASES] = {
     0,
 };
 
-int anim_frame_count[NUM_PHASES] = {
+// Number of frames in each animation in the sequence
+int anim_frame_count[13] = {
     7,
     8,
     40,
@@ -87,6 +94,9 @@ int anim_frame_count[NUM_PHASES] = {
     7,
 };
 
+// Track the status of each animation phase
+//    0 = not complete
+//    1 = complete
 int phase_complete[] = {
     0,
     0,
@@ -103,20 +113,28 @@ int phase_complete[] = {
     0,
 };
 
+// Current phase
 int phase = 0;
+// Current animation (2 per phase)
 int anim_idx = 0;
 
+// Did we just start a new phase?
 bool new_phase = false;
+
+// Did we just start running?
 bool just_started = false;
 
 int frame_step = 1;
 
+// Setup runs once when the microcontroller first turns on
 void setup()
 {
+    // Pressure pin is an input
     pinMode(PRESSURE_PIN, INPUT);
 
     start_time = millis();
 
+    // Initialize the LED matrices
     for (int i = 0; i < lc_left.getDeviceCount(); i++)
     {
         lc_left.shutdown(i, false);
@@ -152,6 +170,7 @@ void loop()
         phase++;
         anim_idx += 2;
 
+        // If that was the last phase, reset everything
         if (phase >= NUM_PHASES)
         {
             phase = 0;
@@ -169,10 +188,12 @@ void loop()
         Serial.println("Starting phase " + String(phase));
 #endif
     }
+
     if (new_phase)
     {
         new_phase = false;
 
+        // Set up variables for this phase
         current_anim_duration = ANIM_DURATION[phase];
         current_anim_left = ANIM_LIST[anim_idx];
         current_anim_right = ANIM_LIST[anim_idx + 1];
@@ -188,12 +209,15 @@ void loop()
 #ifdef DEBUG
         Serial.println("Frame counter: " + String(frame_counter) + " / " + String(current_anim_num_frames));
 #endif
+        // It's an 8x8 matrix, so loop through 8 rows and set all the 8 columns in that row
+        //   Do this for both eyes (the first parameter of setRow specifies which eye)
         for (int i = 0; i < 8; i++)
         {
             lc_left.setRow(0, i, current_anim_left->anim[(frame_counter * 8) + i]);
             lc_left.setRow(1, i, current_anim_right->anim[(frame_counter * 8) + i]);
         }
 
+        // Increment frame_counter
         if (frame_counter < current_anim_num_frames - 1)
         {
             frame_counter++;
@@ -209,6 +233,7 @@ void loop()
 
         long current_time = millis();
 
+        // Have we been running for longer than the duration?
         if (current_time - current_anim_start_time > current_anim_duration * 1000)
         {
             phase_complete[phase] = 1;
@@ -227,6 +252,8 @@ void loop()
                 lc_left.setRow(1, i, current_anim_right->anim[(frame_counter * 8) + i]);
             }
 
+            // When we reach the end of the animation, reverse the direction that it's iterating
+            //   and play the animation backwards
             if (frame_counter == current_anim_num_frames - 1)
             {
                 frame_step = -1;
@@ -259,6 +286,9 @@ void loop()
                 lc_left.setRow(0, i, current_anim_left->anim[(frame_counter * 8) + i]);
                 lc_left.setRow(1, i, current_anim_right->anim[(frame_counter * 8) + i]);
             }
+
+            // Should this actually be commented out?? 
+            // Should probably double check that
             // delay((-current_anim_duration) * 100 / current_anim_num_frames);
 
             if (frame_counter < current_anim_num_frames - 1)
