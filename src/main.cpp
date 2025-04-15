@@ -1,22 +1,33 @@
 #include <Arduino.h>
 #include <LedControl.h>
+#include "DFRobotDFPlayerMini.h"
 #include "anims.h"
+#include "driver/rtc_io.h"
 
 // Uncomment this to get debug info in the serial monitor
 // #define DEBUG
-
-// *** Pressure Sensor Pin *** //
-#define PRESSURE_PIN 0
+#define DEBUG_MUSIC
 
 // *** Eye LedControl pins *** //
-#define DIN_LEFT 7
-#define CS_LEFT 6
-#define CLK_LEFT 5
+#define DIN_LEFT 23
+#define CS_LEFT 5
+#define CLK_LEFT 18
+
+// *** DF Player Pins *** //
+#define RXD2 16
+#define TXD2 17
+
+// *** Deep Sleep *** //
+#define BUTTON_PIN_BITMASK(GPIO) (1ULL << GPIO)
+#define WAKEUP_GPIO GPIO_NUM_26
 
 long start_time = 0;
 
 // *** Eye LedControl objects *** //
 LedControl lc_left = LedControl(DIN_LEFT, CLK_LEFT, CS_LEFT, 2);
+
+// *** DF Player Serial *** //
+DFRobotDFPlayerMini music;
 
 int frame_counter = 0;
 
@@ -26,10 +37,12 @@ int current_anim_duration = 0;
 int current_anim_num_frames = 0;
 long current_anim_start_time = 0;
 
-const int NUM_PHASES = 13;
+const int NUM_PHASES = 12;
+
+bool playing_eyes_close = false;
 
 // All of the animations, in pairs of two, one for each eye
-const Anim *const ANIM_LIST[26] = {
+const Anim *const ANIM_LIST[24] = {
     &ANIM_OPEN_EYES,
     &ANIM_OPEN_EYES,
     &ANIM_WAIT_LEFT,
@@ -53,15 +66,13 @@ const Anim *const ANIM_LIST[26] = {
     &ANIM_COUNTDOWN,
     &ANIM_COUNTDOWN,
     &ANIM_EXCITED_EYES,
-    &ANIM_EXCITED_EYES,
-    &ANIM_CLOSE_EYES,
-    &ANIM_CLOSE_EYES};
+    &ANIM_EXCITED_EYES};
 
 // The duration that each animation should play for
 //   0: play once
 //   > 0: play for x number of seconds
 //   < 0: take x seconds to play once
-int ANIM_DURATION[13] = {
+int ANIM_DURATION[12] = {
     0,
     10,
     -10,
@@ -74,11 +85,10 @@ int ANIM_DURATION[13] = {
     20,
     -10,
     10,
-    0,
 };
 
 // Number of frames in each animation in the sequence
-int anim_frame_count[13] = {
+int anim_frame_count[12] = {
     7,
     8,
     40,
@@ -91,14 +101,12 @@ int anim_frame_count[13] = {
     13,
     40,
     8,
-    7,
 };
 
 // Track the status of each animation phase
 //    0 = not complete
 //    1 = complete
-int phase_complete[] = {
-    0,
+int phase_complete[12] = {
     0,
     0,
     0,
@@ -119,18 +127,89 @@ int phase = 0;
 int anim_idx = 0;
 
 // Did we just start a new phase?
-bool new_phase = false;
+bool is_new_phase = false;
 
 // Did we just start running?
 bool just_started = false;
 
 int frame_step = 1;
 
+void printDetail(uint8_t type, int value)
+{
+    switch (type) {
+      case TimeOut:
+        Serial.println(F("Time Out!"));
+        break;
+      case WrongStack:
+        Serial.println(F("Stack Wrong!"));
+        break;
+      case DFPlayerCardInserted:
+        Serial.println(F("Card Inserted!"));
+        break;
+      case DFPlayerCardRemoved:
+        Serial.println(F("Card Removed!"));
+        break;
+      case DFPlayerCardOnline:
+        Serial.println(F("Card Online!"));
+        break;
+      case DFPlayerUSBInserted:
+        Serial.println("USB Inserted!");
+        break;
+      case DFPlayerUSBRemoved:
+        Serial.println("USB Removed!");
+        break;
+      case DFPlayerPlayFinished:
+        Serial.print(F("Number:"));
+        Serial.print(value);
+        Serial.println(F(" Play Finished!"));
+        break;
+      case DFPlayerError:
+        Serial.print(F("DFPlayerError:"));
+        switch (value) {
+          case Busy:
+            Serial.println(F("Card not found"));
+            break;
+          case Sleeping:
+            Serial.println(F("Sleeping"));
+            break;
+          case SerialWrongStack:
+            Serial.println(F("Get Wrong Stack"));
+            break;
+          case CheckSumNotMatch:
+            Serial.println(F("Check Sum Not Match"));
+            break;
+          case FileIndexOut:
+            Serial.println(F("File Index Out of Bound"));
+            break;
+          case FileMismatch:
+            Serial.println(F("Cannot Find File"));
+            break;
+          case Advertise:
+            Serial.println(F("In Advertise"));
+            break;
+          default:
+            break;
+        }
+        break;
+      default:
+        break;
+    }
+}
+
 // Setup runs once when the microcontroller first turns on
 void setup()
 {
-    // Pressure pin is an input
-    pinMode(PRESSURE_PIN, INPUT);
+    esp_sleep_enable_ext1_wakeup_io(BUTTON_PIN_BITMASK(WAKEUP_GPIO), ESP_EXT1_WAKEUP_ANY_HIGH);
+    /*
+      If there are no external pull-up/downs, tie wakeup pins to inactive level with internal pull-up/downs via RTC IO
+          during deepsleep. However, RTC IO relies on the RTC_PERIPH power domain. Keeping this power domain on will
+          increase some power comsumption. However, if we turn off the RTC_PERIPH domain or if certain chips lack the RTC_PERIPH
+          domain, we will use the HOLD feature to maintain the pull-up and pull-down on the pins during sleep.
+    */
+    rtc_gpio_pulldown_en(WAKEUP_GPIO);  // GPIO33 is tie to GND in order to wake up in HIGH
+    rtc_gpio_pullup_dis(WAKEUP_GPIO);  
+
+    pinMode(WAKEUP_GPIO, INPUT);
 
     start_time = millis();
 
@@ -142,10 +221,26 @@ void setup()
         lc_left.clearDisplay(i);
     }
 
-#ifdef DEBUG
+#ifdef DEBUG 
     Serial.begin(115200);
     Serial.println("Starting");
 #endif
+
+#ifdef DEBUG_MUSIC
+    Serial.begin(115200);
+    Serial.println("Starting");
+#endif
+
+    Serial2.begin(9600, SERIAL_8N1, RXD2, TXD2);
+    if (!music.begin(Serial2, true, true)) {  //Use serial to communicate with mp3.
+      Serial.println(F("Unable to begin:"));
+      Serial.println(F("1.Please recheck the connection!"));
+      Serial.println(F("2.Please insert the SD card!"));
+      while(true){
+        delay(0); // Code to compatible with ESP8266 watch dog.
+      }
+    }
+    Serial.println(F("DFPlayer Mini online."));
 
     current_anim_duration = ANIM_DURATION[0];
     current_anim_left = ANIM_LIST[0];
@@ -157,18 +252,59 @@ void setup()
 void loop()
 {
     // if pressure is above threshold don't do anything
-    if (analogRead(PRESSURE_PIN) < 50)
+    if (analogRead(WAKEUP_GPIO) > 4000 && playing_eyes_close == false)
     {
-        return;
+        playing_eyes_close = true;
+        current_anim_num_frames = 7;
+        frame_counter = 0;
+        current_anim_left = &ANIM_CLOSE_EYES;
+        current_anim_right = &ANIM_CLOSE_EYES;
+
+        delay(1000);
     }
 
+#ifdef DEBUG_MUSIC
+    if (music.available()) {
+      printDetail(music.readType(), music.read()); //Print the detail message from DFPlayer to handle different errors and states.
+    }
+#endif
+
     delay(250);
+
+
+    if (playing_eyes_close)
+    {
+      for (int i = 0; i < 8; i++)
+      {
+          lc_left.setRow(0, i, current_anim_left->anim[(frame_counter * 8) + i]);
+          lc_left.setRow(1, i, current_anim_right->anim[(frame_counter * 8) + i]);
+      }
+
+      // Increment frame_counter
+      if (frame_counter < current_anim_num_frames - 1)
+      {
+          frame_counter++;
+      }
+      else
+      {
+        delay(1000);
+        esp_deep_sleep_start();
+      }
+    }
+
 
     // if phase is complete, move to next phase
     if (phase_complete[phase])
     {
         phase++;
         anim_idx += 2;
+
+        if (phase == 3)
+        {
+            music.volume(10);
+            Serial.println(music.readVolume());
+            music.playFolder(1, 1);
+        }
 
         // If that was the last phase, reset everything
         if (phase >= NUM_PHASES)
@@ -180,18 +316,21 @@ void loop()
             {
                 phase_complete[i] = 0;
             }
+
+            playing_eyes_close = true;
+            return;
         }
 
-        new_phase = true;
+        is_new_phase = true;
 
 #ifdef DEBUG
         Serial.println("Starting phase " + String(phase));
 #endif
     }
 
-    if (new_phase)
+    if (is_new_phase)
     {
-        new_phase = false;
+        is_new_phase = false;
 
         // Set up variables for this phase
         current_anim_duration = ANIM_DURATION[phase];
@@ -244,7 +383,7 @@ void loop()
             Serial.println("Frame counter: " + String(frame_counter) + " / " + String(current_anim_num_frames));
 
             // Print a message about how long we have been looping
-            Serial.println("Current time: " + String(current_time - current_anim_start_time) + " / " + String(current_anim_duration * 100));
+            Serial.println("Current time: " + String(current_time - current_anim_start_time) + " / " + String(current_anim_duration * 1000));
 #endif
             for (int i = 0; i < 8; i++)
             {
@@ -302,3 +441,4 @@ void loop()
         }
     }
 }
+
